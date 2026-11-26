@@ -1,0 +1,9 @@
+-xc++
+-std=c++17
+-I../sdk/include
+-F/opt/homebrew/lib
+-I/opt/homebrew/lib/QtCore.framework/Headers
+-I/opt/homebrew/lib/QtGui.framework/Headers
+-I/opt/homebrew/lib/QtWidgets.framework/Headers
+-I/opt/homebrew/lib/QtNetwork.framework/Headers
+-Ibuild/vwatch_autogen/include

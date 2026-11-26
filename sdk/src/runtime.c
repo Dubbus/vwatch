@@ -83,7 +83,8 @@ int main(void) {
             info.width = VW_W;
             info.height = VW_H;
             info.round = (uint8_t)vw_port_display_round();
-            strncpy(info.app_name, vw_app_name, sizeof info.app_name);
+            for (size_t i = 0; i < sizeof info.app_name - 1 && vw_app_name[i]; i++)
+                info.app_name[i] = vw_app_name[i];      /* NUL-padded by the memset */
             send(VW_MSG_INFO, &info, sizeof info);
             vw_dirty.x0 = 0; vw_dirty.y0 = 0;            /* host needs a full frame */
             vw_dirty.x1 = VW_W - 1; vw_dirty.y1 = VW_H - 1;

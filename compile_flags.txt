@@ -1,5 +1,0 @@
--xc
--std=c11
---target=arm-none-eabi
--Isdk/include
--Isdk/src

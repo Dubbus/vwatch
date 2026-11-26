@@ -3,11 +3,32 @@
 A virtual machine for smartwatch firmware. Write a watch face or app in C
 against a small SDK, boot it on an emulated Cortex-M4, and watch it draw.
 
-> Status: early. Phase 1 (SDK, runtime, emulator link, headless host) works.
-> The desktop app (a VirtualBox-style manager, VM window and IDE with an AI
-> assistant) is in progress. See [Roadmap](#roadmap).
+> Status: early, but usable: SDK, emulator, desktop VM window with live
+> reload, and a headless host for tests and activity replay.
 
-![hello_face running in vwatch](docs/hello_face.png)
+Bring your own editor: keep VS Code (or anything) on one half of the screen
+and the vwatch window on the other. Save a file and vwatch rebuilds and
+reboots the watch, like live-reloading an HTML page.
+
+![the vwatch window running hello_face](docs/vwatch_app.png)
+
+## The VM window
+
+```
+brew install qemu qtbase cmake         # plus the Arm GNU toolchain (arm-none-eabi-gcc)
+cmake -S app -B app/build && cmake --build app/build
+app/build/vwatch examples/hello_face   # a project dir (live reload) or a .elf
+```
+
+Open the same folder in your editor. On every save vwatch runs `make`, and
+on success it reboots the watch with the new firmware. A failed build leaves
+the previous firmware running and prints the compiler errors in the serial
+console. A firmware that hangs inside `app_tick()` is caught by a 3-second
+watchdog.
+
+- **Buttons:** click the bezel buttons, or use L / ↑ / ↓ / Return / Esc.
+- **Sensors:** heart rate and speed sliders in the toolbar.
+- **Machine menu:** pause, reset, rebuild, speed 1x–300x.
 
 ## How it works
 
@@ -30,9 +51,16 @@ against a small SDK, boot it on an emulated Cortex-M4, and watch it draw.
 - **Port layer** (`sdk/port/<target>/`): UART, startup and linker script per
   target. `qemu-mps2` today; real hardware ports go here.
 
-## Quick start
+## Examples
 
-Needs `arm-none-eabi-gcc`, `make` and `qemu-system-arm` (`brew install qemu`).
+| | |
+|---|---|
+| ![hello_face](docs/hello_face.png) | ![te_screen](docs/te_screen.png) |
+| `hello_face`: clock, seconds ring, heart rate, stopwatch | `te_screen`: live Aerobic Training Effect from heart rate (EPOC model) |
+
+## Headless (tests, CI, activity replay)
+
+Needs `arm-none-eabi-gcc`, `make` and `qemu-system-arm`.
 
 ```
 cd examples/hello_face
@@ -59,16 +87,22 @@ void app_button(int b, int down) { (void)b; (void)down; }
 
 ```
 python3 tests/test_hello_face.py
+python3 tests/test_te_screen.py [activity.fit]
+```
+
+Replay a recorded activity (needs `pip install fitdecode`):
+
+```
+python3 host/vwhost.py examples/te_screen/build/te_screen.elf --fit run.fit --every 5 --png out.png
 ```
 
 ## Roadmap
 
 1. ~~SDK, runtime, protocol, QEMU port, headless host~~
-2. VM window (C++/Qt): white canvas with the live watch screen, bezel buttons, serial console
-3. Manager window in the style of VirtualBox 5: watch list, details pane, New/Settings/Start
-4. IDE: editor, build, run, clickable compiler errors, size and cost report
-5. AI assistant pane: describe a change, review the diff, apply it ("vibe code" next to hand code)
-6. Deploy targets: [PineTime](https://pine64.org/devices/pinetime/) (open hardware, native firmware;
+2. ~~VM window (C++/Qt): live watch screen, bezel buttons, sensor sliders,
+   serial console, live reload on save~~
+3. Activity replay: ~~headless (`vwhost.py --fit`)~~, then in the VM window
+4. Deploy targets: [PineTime](https://pine64.org/devices/pinetime/) (open hardware, native firmware;
    flashing is at your own risk) and Garmin via a Connect IQ export (sandboxed app, no firmware changes)
 
 vwatch does not modify or flash proprietary watch firmware.
