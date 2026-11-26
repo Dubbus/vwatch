@@ -1,7 +1,15 @@
 #include "vmwindow.h"
 
 #include "session.h"
+#include "traceplot.h"
 #include "watchview.h"
+
+#include <QFile>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QRegularExpression>
+#include <QTextStream>
+#include <QVBoxLayout>
 
 #include <QActionGroup>
 #include <QApplication>
@@ -37,7 +45,18 @@ VmWindow::VmWindow(const QString &target, QWidget *parent)
         updateStatus();
     });
     connect(m_session, &Session::screenChanged, m_view, [this](const QRect &) { m_view->update(); });
-    connect(m_session, &Session::logLine, this, [this](const QString &l) { log(l); });
+    connect(m_session, &Session::logLine, this, [this](const QString &l) {
+        log(l);
+        // A firmware "reports" a metric by logging e.g. "te 3.22 ...". Plot it
+        // against the activity's own value when replaying a run.
+        static const QRegularExpression re(R"(\bte\s+([0-9]+\.?[0-9]*))");
+        const auto m = re.match(l);
+        if (m.hasMatch()) {
+            m_liveValue = m.captured(1).toDouble();
+            if (m_runActive) m_plot->push(m_liveValue);
+            updateGroundTruth();
+        }
+    });
     connect(m_session, &Session::tickDone, this, [this](quint32, quint32 bytes) {
         m_lastBytes = bytes;
         updateStatus();
@@ -91,6 +110,10 @@ void VmWindow::buildUi() {
         m_watcher->addPath(m_elf);
         connect(m_watcher, &QFileSystemWatcher::fileChanged, this, &VmWindow::scheduleReload, Qt::UniqueConnection);
         boot(m_elf);
+    });
+    file->addAction("Open &Activity...", QKeySequence("Ctrl+Shift+O"), this, [this] {
+        const QString p = QFileDialog::getOpenFileName(this, "Open activity", {}, "vwatch run (*.vwr)");
+        if (!p.isEmpty()) openActivity(p);
     });
     file->addSeparator();
     file->addAction("&Quit", QKeySequence::Quit, qApp, &QApplication::quit);
@@ -179,9 +202,48 @@ void VmWindow::buildUi() {
     view->addAction(dock->toggleViewAction());
     view->addAction(tb->toggleViewAction());
 
+    setupGroundTruth();
+
     m_status = new QLabel;
     statusBar()->addWidget(m_status, 1);
-    resize(720, 860);
+    resize(980, 860);
+}
+
+void VmWindow::setupGroundTruth() {
+    auto *panel = new QWidget;
+    auto *col = new QVBoxLayout(panel);
+    auto *form = new QGroupBox("Activity");
+    auto *fl = new QFormLayout(form);
+    m_gtName = new QLabel("No activity loaded");
+    m_gtName->setWordWrap(true);
+    m_gtSport = new QLabel("-");
+    m_gtTruth = new QLabel("-");
+    m_gtLive = new QLabel("-");
+    m_gtDelta = new QLabel("-");
+    QFont big = m_gtLive->font();
+    big.setPointSizeF(big.pointSizeF() * 1.4);
+    big.setBold(true);
+    m_gtLive->setFont(big);
+    fl->addRow(m_gtName);
+    fl->addRow("Sport", m_gtSport);
+    fl->addRow("Watch TE", m_gtTruth);
+    fl->addRow("Your firmware", m_gtLive);
+    fl->addRow("Difference", m_gtDelta);
+    col->addWidget(form);
+    m_plot = new TracePlot;
+    col->addWidget(new QLabel("Your output (orange) vs the watch (dashed)"));
+    col->addWidget(m_plot, 1);
+    auto *hint = new QLabel("File > Open Activity plays a recorded run through your "
+                            "firmware. Export one with host/fit_to_vwr.py.");
+    hint->setWordWrap(true);
+    hint->setStyleSheet("color: gray;");
+    col->addWidget(hint);
+
+    auto *dock = new QDockWidget("Ground Truth", this);
+    dock->setWidget(panel);
+    dock->setMinimumWidth(240);
+    addDockWidget(Qt::RightDockWidgetArea, dock);
+    m_view->addAction(dock->toggleViewAction());
 }
 
 void VmWindow::log(const QString &line, const QColor &color) {
@@ -193,7 +255,7 @@ void VmWindow::log(const QString &line, const QColor &color) {
 
 void VmWindow::setSpeed(int multiplier) {
     m_mult = multiplier;
-    m_ticker->start(qMax(1, 1000 / multiplier));
+    m_ticker->start(50);                 // fixed 20 fps; the accumulator sets how many sim-seconds advance
     updateStatus();
 }
 
@@ -223,9 +285,101 @@ void VmWindow::onTick() {
         }
         return;   // lockstep: never queue ticks behind a slow app_tick()
     }
+    m_simAccum += m_mult * 0.05;         // 50 ms ticker -> m_mult sim-seconds per wall second
+    if (m_simAccum < 1.0) return;        // advance exactly one sim-second each send (keeps the model 1 Hz)
+    m_simAccum -= 1.0;
+
+    if (m_runActive) {
+        if (m_runPos >= m_run.size()) {
+            stopReplay();
+            return;
+        }
+        const RunSample &s = m_run[m_runPos++];
+        m_tMs = (s.tS + 1) * 1000;
+        m_session->sendTick(m_tMs, s.hr, s.speed, s.cadence);
+        m_tickSent.start();
+        return;
+    }
     m_tMs += 1000;
     m_session->sendTick(m_tMs, float(m_hr->value()), m_speed->value() / 10.0f, m_speed->value() ? 165.0f : 0.0f);
     m_tickSent.start();
+}
+
+void VmWindow::openActivity(const QString &path) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        log("cannot open " + path, QColor(240, 80, 70));
+        return;
+    }
+    QVector<RunSample> run;
+    double truth = 0;
+    QString name = QFileInfo(path).fileName(), sport;
+    QTextStream in(&f);
+    while (!in.atEnd()) {
+        const QString line = in.readLine();
+        if (line.isEmpty() || line.startsWith('#')) continue;
+        if (line[0].isLetter()) {                             // header key value
+            const int sp = line.indexOf(' ');
+            if (sp < 0) continue;
+            const QString k = line.left(sp), v = line.mid(sp + 1);
+            if (k == "name") name = v;
+            else if (k == "sport") sport = v;
+            else if (k == "garmin_te") truth = v.toDouble();
+        } else {                                              // t hr speed cadence
+            const QStringList c = line.split(' ', Qt::SkipEmptyParts);
+            if (c.size() >= 4)
+                run.append({c[0].toUInt(), c[1].toFloat(), c[2].toFloat(), c[3].toFloat()});
+        }
+    }
+    if (run.isEmpty()) {
+        log("no samples in " + path, QColor(240, 80, 70));
+        return;
+    }
+    m_run = run;
+    m_runPos = 0;
+    m_runActive = true;
+    m_runTruth = truth;
+    m_runName = name;
+    m_runSport = sport.isEmpty() ? "unknown" : sport;
+    m_liveValue = 0;
+    m_tMs = 0;
+    m_simAccum = 0;
+    m_hr->setEnabled(false);
+    m_speed->setEnabled(false);
+    m_plot->clear();
+    m_plot->setTruth(truth);
+    log(QString("--- replay %1 (%2 s, watch TE %3) ---").arg(name).arg(run.size()).arg(truth, 0, 'f', 1),
+        QColor(90, 150, 255));
+    updateGroundTruth();
+    m_project.isEmpty() ? boot(m_elf) : rebuild();            // fresh boot for the run
+}
+
+void VmWindow::stopReplay() {
+    if (!m_runActive) return;
+    m_runActive = false;
+    m_hr->setEnabled(true);
+    m_speed->setEnabled(true);
+    const double d = m_liveValue - m_runTruth;
+    log(QString("replay done: your firmware %1, watch %2, diff %3%4")
+            .arg(m_liveValue, 0, 'f', 2).arg(m_runTruth, 0, 'f', 1)
+            .arg(d >= 0 ? "+" : "").arg(d, 0, 'f', 2),
+        QColor(60, 180, 75));
+    updateGroundTruth();
+}
+
+void VmWindow::updateGroundTruth() {
+    if (!m_gtName) return;
+    if (m_run.isEmpty()) {
+        m_gtName->setText("No activity loaded");
+        return;
+    }
+    m_gtName->setText(m_runName);
+    m_gtSport->setText(m_runSport);
+    m_gtTruth->setText(m_runTruth > 0 ? QString::number(m_runTruth, 'f', 1) : "n/a");
+    m_gtLive->setText(QString::number(m_liveValue, 'f', 2));
+    const double d = m_liveValue - m_runTruth;
+    m_gtDelta->setText(m_runTruth > 0 ? QString("%1%2").arg(d >= 0 ? "+" : "").arg(d, 0, 'f', 2) : "-");
+    m_gtDelta->setStyleSheet(qAbs(d) <= 0.3 ? "color: #3cb44b;" : "color: #e07038;");
 }
 
 void VmWindow::updateStatus() {
@@ -235,8 +389,10 @@ void VmWindow::updateStatus() {
                           .arg(s / 3600).arg(s / 60 % 60, 2, 10, QChar('0')).arg(s % 60, 2, 10, QChar('0'))
                           .arg(m_mult).arg(m_paused ? " (paused)" : "")
                           .arg(m_lastBytes)
-                          .arg(m_project.isEmpty() ? "watching " + QFileInfo(m_elf).fileName()
-                                                   : "live reload: " + QDir(m_project).dirName()));
+                          .arg(m_runActive
+                                   ? QString("replay %1 / %2 s").arg(m_runPos).arg(m_run.size())
+                                   : m_project.isEmpty() ? "watching " + QFileInfo(m_elf).fileName()
+                                                         : "live reload: " + QDir(m_project).dirName()));
 }
 
 // ---------- live reload ----------

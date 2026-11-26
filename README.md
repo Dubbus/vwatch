@@ -101,7 +101,7 @@ python3 host/vwhost.py examples/te_screen/build/te_screen.elf --fit run.fit --ev
 1. ~~SDK, runtime, protocol, QEMU port, headless host~~
 2. ~~VM window (C++/Qt): live watch screen, bezel buttons, sensor sliders,
    serial console, live reload on save~~
-3. Activity replay: ~~headless (`vwhost.py --fit`)~~, then in the VM window
+3. ~~Activity replay: headless (`vwhost.py --fit`) and in the VM window (File > Open Activity), with the watch's own value shown beside your firmware's~~
 4. Deploy targets: [PineTime](https://pine64.org/devices/pinetime/) (open hardware, native firmware;
    flashing is at your own risk) and Garmin via a Connect IQ export (sandboxed app, no firmware changes)
 

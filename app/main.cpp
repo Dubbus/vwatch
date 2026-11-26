@@ -16,6 +16,8 @@ int main(int argc, char **argv) {
     cli.setApplicationDescription("A virtual machine for smartwatch firmware.");
     cli.addHelpOption();
     cli.addPositionalArgument("target", "Project directory (with a Makefile) or firmware .elf", "<target>");
+    QCommandLineOption activity("activity", "Replay a recorded run (.vwr) through the firmware.", "vwr");
+    cli.addOption(activity);
     QCommandLineOption shot("screenshot", "Save a PNG of the window after --after seconds, then quit.", "png");
     QCommandLineOption after("after", "Seconds before --screenshot (default 5).", "s", "5");
     cli.addOption(shot);
@@ -30,6 +32,7 @@ int main(int argc, char **argv) {
     }
     VmWindow w(target);
     w.show();
+    if (cli.isSet(activity)) w.playActivity(cli.value(activity));
     if (cli.isSet(shot)) {
         const QString path = cli.value(shot);
         QTimer::singleShot(int(cli.value(after).toDouble() * 1000), &app, [&w, path] {
