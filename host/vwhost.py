@@ -5,8 +5,12 @@ tests and CI. The desktop app does the same thing in C++.
 
   python3 host/vwhost.py build/app.elf --ticks 12 --png out.png \
       --hr 120:165 --press 5:START,8:UP
+  python3 host/vwhost.py build/app.elf --fit run.fit --every 5 --png out.png
 
-Standard library only.
+--fit replays a recorded activity: HR, speed and cadence resampled to 1 Hz,
+t_ms = seconds since the first record. --every N ticks once per N seconds of
+activity time and sends the mean over those N seconds, so long runs replay
+fast. Standard library only, except --fit, which needs `pip install fitdecode`.
 """
 from __future__ import annotations
 import argparse, math, os, socket, struct, subprocess, sys, tempfile, time, zlib
@@ -129,37 +133,133 @@ class Watch:
             f.write(chunk(b"IEND", b""))
 
 
+# ---------- recorded activities ----------
+STEP_SPORTS = {"running", "walking", "hiking", "trail_running", "treadmill_running"}
+
+
+def _interp_1hz(ts: list[float], vs: list[float], n: int) -> list[float]:
+    """Linear interpolation of (ts, vs) onto t = 0..n-1 s, held at the ends."""
+    if not ts:
+        return [0.0] * n
+    out, j = [], 0
+    for t in range(n):
+        while j + 1 < len(ts) and ts[j + 1] <= t:
+            j += 1
+        if t <= ts[0]:
+            out.append(vs[0])
+        elif j + 1 >= len(ts):
+            out.append(vs[-1])
+        else:
+            t0, t1 = ts[j], ts[j + 1]
+            out.append(vs[j] + (vs[j + 1] - vs[j]) * (t - t0) / (t1 - t0) if t1 > t0 else vs[j])
+    return out
+
+
+def load_fit(path: str) -> dict:
+    """1 Hz HR (bpm), speed (m/s), cadence (steps/min) from a FIT activity."""
+    try:
+        import fitdecode
+    except ImportError:
+        sys.exit("--fit needs the fitdecode package: python3 -m pip install fitdecode")
+    recs, sport = [], ""
+    with fitdecode.FitReader(path) as fit:
+        for fr in fit:
+            if fr.frame_type != fitdecode.FIT_FRAME_DATA:
+                continue
+            if fr.name in ("sport", "session") and not sport:
+                v = fr.get_value("sport", fallback=None)
+                sport = str(v) if v is not None else ""
+            elif fr.name == "record":
+                f = {x.name: x.value for x in fr.fields}
+                if f.get("timestamp") is not None:
+                    recs.append(f)
+    if not recs:
+        sys.exit(f"{path}: no record messages")
+    t0 = recs[0]["timestamp"]
+    t = [(r["timestamp"] - t0).total_seconds() for r in recs]
+    n = int(t[-1]) + 1
+
+    def channel(get):
+        pts = [(ti, v) for ti, r in zip(t, recs) if (v := get(r)) is not None]
+        return _interp_1hz([p[0] for p in pts], [float(p[1]) for p in pts], n)
+
+    def speed(r):
+        v = r.get("enhanced_speed")
+        return v if v is not None else r.get("speed")
+
+    k = 2.0 if sport in STEP_SPORTS else 1.0       # FIT run cadence is strides/min
+
+    def cadence(r):
+        c = r.get("cadence")
+        return None if c is None else k * (c + (r.get("fractional_cadence") or 0.0))
+
+    return {"hr": channel(lambda r: r.get("heart_rate")), "speed": channel(speed),
+            "cadence": channel(cadence), "sport": sport, "seconds": n}
+
+
+def fit_ticks(act: dict, every: int):
+    """Yield (t_ms, hr, speed, cadence) per tick: the mean over each window of
+    `every` seconds, stamped with the window's last second."""
+    n = act["seconds"]
+    for k in range(0, n, every):
+        e = min(k + every, n)
+        mean = lambda xs: sum(xs[k:e]) / (e - k)
+        yield (e - 1) * 1000, mean(act["hr"]), mean(act["speed"]), mean(act["cadence"])
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("elf")
-    ap.add_argument("--ticks", type=int, default=10)
+    ap.add_argument("--ticks", type=int, default=None,
+                    help="number of ticks (default 10; with --fit, the whole activity)")
     ap.add_argument("--hr", default="70:150", help="lo:hi bpm, ramps over the run")
+    ap.add_argument("--fit", default=None, help="replay a recorded .fit activity")
+    ap.add_argument("--every", type=int, default=1,
+                    help="tick every N seconds of activity time (default 1)")
     ap.add_argument("--press", default="", help="tick:BUTTON[,tick:BUTTON...]")
     ap.add_argument("--png", default=None)
     a = ap.parse_args(argv)
 
-    lo, hi = (float(v) for v in a.hr.split(":"))
+    if a.every < 1:
+        ap.error("--every must be >= 1")
     presses: dict[int, list[str]] = {}
     for item in filter(None, a.press.split(",")):
         k, b = item.split(":")
         presses.setdefault(int(k), []).append(b.upper())
+
+    if a.fit:
+        act = load_fit(a.fit)
+        ticks = list(fit_ticks(act, a.every))
+        if a.ticks is not None:
+            ticks = ticks[:a.ticks]
+        print(f"replaying {os.path.basename(a.fit)}: {act['sport'] or 'activity'}, "
+              f"{act['seconds']} s, {len(ticks)} ticks every {a.every} s")
+    else:
+        lo, hi = (float(v) for v in a.hr.split(":"))
+        n = 10 if a.ticks is None else a.ticks
+        ticks = [(i * a.every * 1000, lo + (hi - lo) * i / max(1, n - 1) + 3 * math.sin(i), 3.0, 0.0)
+                 for i in range(n)]
+    show = max(1, len(ticks) // 20)                    # keep long replays readable
 
     w = Watch(a.elf)
     try:
         t0 = time.perf_counter()
         info = w.hello()
         print(f"booted {info['app']!r}: {info['w']}x{info['h']} round={info['round']} proto v{info['proto']}")
-        for i in range(a.ticks):
+        for i, (t_ms, hr, spd, cad) in enumerate(ticks):
             for b in presses.get(i, []):
                 w.button(b, True)
                 w.button(b, False)
-            hr = lo + (hi - lo) * i / max(1, a.ticks - 1) + 3 * math.sin(i)
-            r = w.tick(i * 1000, hr=hr, speed=3.0)
-            print(f"tick {i:3d}  hr={hr:5.1f}  redraw={r['frame_bytes']:6d} B")
+            r = w.tick(t_ms, hr=hr, speed=spd, cadence=cad)
+            if i % show == 0 or i == len(ticks) - 1:
+                print(f"tick {i:4d}  t={t_ms / 1000:7.0f} s  hr={hr:5.1f}  redraw={r['frame_bytes']:6d} B")
         dt = time.perf_counter() - t0
-        for line in w.logs:
+        logs = w.logs
+        if len(logs) > 40:                             # long replay: first and last lines
+            logs = logs[:20] + [f"... {len(logs) - 40} more ..."] + logs[-20:]
+        for line in logs:
             print(f"[fw] {line}")
-        print(f"{a.ticks} ticks in {dt:.2f} s")
+        print(f"{len(ticks)} ticks in {dt:.2f} s")
         if a.png:
             w.png(a.png)
             print(f"wrote {a.png}")
