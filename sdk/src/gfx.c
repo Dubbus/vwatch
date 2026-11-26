@@ -119,3 +119,13 @@ int vw_text_width(const char *s, int scale) {
 void vw_text_centered(int cx, int y, const char *s, vw_color_t c, int scale) {
     vw_text(cx - vw_text_width(s, scale) / 2, y, s, c, scale);
 }
+
+/* Display backend hook (see runtime.c): push the dirty region, or everything. */
+uint32_t vw_gfx_update(int full) {
+    if (full) { vw_dirty.x0 = 0; vw_dirty.y0 = 0; vw_dirty.x1 = VW_W - 1; vw_dirty.y1 = VW_H - 1; }
+    if (vw_dirty.x1 < vw_dirty.x0) return 0;
+    uint32_t n = vw_send_rect(vw_dirty.x0, vw_dirty.y0, vw_dirty.x1 - vw_dirty.x0 + 1,
+                              vw_dirty.y1 - vw_dirty.y0 + 1, &vw_fb[vw_dirty.y0][vw_dirty.x0], VW_W);
+    vw_dirty_reset();
+    return n;
+}

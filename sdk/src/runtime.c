@@ -49,26 +49,38 @@ void vw_backlight(int on) {
 void vw_backlight_timeout(uint32_t ms) { bl_timeout_ms = ms; }
 void vw_backlight_auto(int enabled) { bl_auto = enabled ? 1 : 0; }
 
-/* Ship the dirty region as one or more RECT messages, rows split so each
- * message fits VW_MAX_PAYLOAD. Returns pixel bytes sent. */
-static uint32_t flush_dirty(void) {
-    if (vw_dirty.x1 < vw_dirty.x0) return 0;
-    int x = vw_dirty.x0, w = vw_dirty.x1 - vw_dirty.x0 + 1;
+/* Send a screen region as RECT messages, split by rows so each fits
+ * VW_MAX_PAYLOAD. px points at the region's top-left pixel; stride is the
+ * source row length in bytes. Returns pixel bytes sent. Used by both display
+ * backends. */
+uint32_t vw_send_rect(int x, int y, int w, int h, const uint8_t *px, int stride) {
+    if (w <= 0 || h <= 0) return 0;
     int rows_per_msg = (VW_MAX_PAYLOAD - (int)sizeof(vw_msg_rect_t)) / w;
     uint32_t sent = 0;
-    for (int y = vw_dirty.y0; y <= vw_dirty.y1; y += rows_per_msg) {
-        int h = vw_dirty.y1 - y + 1;
-        if (h > rows_per_msg) h = rows_per_msg;
-        vw_msg_rect_t r = {(uint16_t)x, (uint16_t)y, (uint16_t)w, (uint16_t)h};
-        uint16_t len = (uint16_t)(sizeof r + (uint32_t)w * (uint32_t)h);
+    for (int r0 = 0; r0 < h; r0 += rows_per_msg) {
+        int rh = h - r0 < rows_per_msg ? h - r0 : rows_per_msg;
+        vw_msg_rect_t r = {(uint16_t)x, (uint16_t)(y + r0), (uint16_t)w, (uint16_t)rh};
+        uint16_t len = (uint16_t)(sizeof r + (uint32_t)w * (uint32_t)rh);
         uint8_t hdr[5] = {VW_SYNC0, VW_SYNC1, VW_MSG_RECT, (uint8_t)(len & 0xFF), (uint8_t)(len >> 8)};
         vw_port_write(hdr, sizeof hdr);
         vw_port_write((const uint8_t *)&r, sizeof r);
-        for (int yy = y; yy < y + h; yy++) vw_port_write(&vw_fb[yy][x], (uint32_t)w);
-        sent += (uint32_t)(w * h);
+        for (int i = 0; i < rh; i++) vw_port_write(px + (r0 + i) * stride, (uint32_t)w);
+        sent += (uint32_t)(w * rh);
     }
-    vw_dirty_reset();
     return sent;
+}
+
+/* Display backends. The SDK is linked as a library, so only the backend an app
+ * actually uses ends up in its image: gfx.c (the vw_* drawing calls) or
+ * vw_lvgl.c (LVGL). Each pushes changed regions; full = resend everything. */
+uint32_t vw_gfx_update(int full) __attribute__((weak));
+uint32_t vw_lvgl_update(int full) __attribute__((weak));
+
+static uint32_t display_update(int full) {
+    uint32_t n = 0;
+    if (vw_gfx_update) n += vw_gfx_update(full);
+    if (vw_lvgl_update) n += vw_lvgl_update(full);
+    return n;
 }
 
 /* Read one framed message; returns its type, fills rx/len. Resyncs on garbage. */
@@ -88,7 +100,6 @@ static uint8_t recv(uint16_t *len) {
 
 int main(void) {
     vw_port_init();
-    vw_clear(VW_BLACK);
     app_init();
     for (;;) {
         uint16_t len;
@@ -109,9 +120,7 @@ int main(void) {
                 vw_msg_backlight_t m = {(uint8_t)(bl_on ? 100 : 0)};
                 send(VW_MSG_BACKLIGHT, &m, sizeof m);
             }
-            vw_dirty.x0 = 0; vw_dirty.y0 = 0;            /* host needs a full frame */
-            vw_dirty.x1 = VW_W - 1; vw_dirty.y1 = VW_H - 1;
-            flush_dirty();
+            display_update(1);                           /* host needs a full frame */
             break;
         }
         case VW_MSG_TICK:
@@ -124,7 +133,7 @@ int main(void) {
                 sensors.cadence = t.cadence;
                 if (bl_on && bl_timeout_ms && (int32_t)(now_ms - bl_off_at) >= 0) set_backlight(0);
                 app_tick();
-                vw_msg_tick_done_t done = {now_ms, flush_dirty()};
+                vw_msg_tick_done_t done = {now_ms, display_update(0)};
                 send(VW_MSG_TICK_DONE, &done, sizeof done);
             }
             break;
@@ -136,7 +145,7 @@ int main(void) {
                     if (b.pressed == VW_PRESSED && bl_auto) vw_backlight(1);
                     app_button(b.button, b.pressed);
                 }
-                flush_dirty();
+                display_update(0);
             }
             break;
         default:

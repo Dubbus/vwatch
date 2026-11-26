@@ -11,6 +11,9 @@ extern uint8_t vw_fb[VW_H][VW_W];
 extern vw_dirty_t vw_dirty;
 void vw_dirty_reset(void);
 
+/* runtime: ship a screen region to the host (both display backends use it) */
+uint32_t vw_send_rect(int x, int y, int w, int h, const uint8_t *px, int stride);
+
 /* ---------- port layer: implemented once per target (sdk/port/<target>) ---------- */
 void vw_port_init(void);
 void vw_port_write(const uint8_t *buf, uint32_t n);   /* blocking */

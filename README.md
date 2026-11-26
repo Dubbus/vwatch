@@ -53,10 +53,41 @@ watchdog.
 
 ## Examples
 
-| | |
-|---|---|
-| ![hello_face](docs/hello_face.png) | ![te_screen](docs/te_screen.png) |
-| `hello_face`: clock, seconds ring, heart rate, stopwatch | `te_screen`: live Aerobic Training Effect from heart rate (EPOC model) |
+| | | |
+|---|---|---|
+| ![lvgl_face](docs/lvgl_face.png) | ![hello_face](docs/hello_face.png) | ![te_screen](docs/te_screen.png) |
+| `lvgl_face`: watch face built with LVGL | `hello_face`: the same face with the SDK's basic drawing calls | `te_screen`: live Aerobic Training Effect from heart rate |
+
+## LVGL
+
+For real watch UIs, build with [LVGL](https://lvgl.io) (v9.2, MIT), the
+standard embedded graphics library and the one open watch firmware such as
+PineTime's uses. Anti-aliased fonts, arcs and widgets, rendered in 16-bit
+colour and converted to the 64-colour display. LVGL apps don't carry the basic
+framebuffer: the SDK links as a library, so each app gets only the display
+backend it uses.
+
+```c
+#include <vw_lvgl.h>
+void app_init(void) {
+    vw_lvgl_init();
+    lv_obj_t *l = lv_label_create(lv_screen_active());
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_48, 0);
+    lv_label_set_text(l, "10:08");
+    lv_obj_center(l);
+}
+```
+
+Set `USE_LVGL := 1` in the app Makefile. LVGL is a git submodule:
+`git clone --recursive`, or `git submodule update --init` in an existing clone.
+The first LVGL build compiles it once (~10 s) into `sdk/build/`.
+
+## Hardware parity
+
+The emulated watch follows a 240×240 round, 64-colour transflective (MIP)
+display: reflective and muted when unlit, brighter when lit. Any button press
+lights it for 8 s (`vw_backlight*` to control it). Buttons report press, hold
+(after ~1 s) and release, so apps can use long-presses the way watch UIs do.
 
 ## Headless (tests, CI, activity replay)
 
@@ -88,6 +119,7 @@ void app_button(int b, int down) { (void)b; (void)down; }
 ```
 python3 tests/test_hello_face.py
 python3 tests/test_te_screen.py [activity.fit]
+python3 tests/test_lvgl_face.py
 ```
 
 Replay a recorded activity (needs `pip install fitdecode`):

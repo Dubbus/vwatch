@@ -1,3 +1,6 @@
 -std=c11
+-DLV_CONF_INCLUDE_SIMPLE
 -Iinclude
 -Isrc
+-Ilvgl
+-Ithird_party/lvgl

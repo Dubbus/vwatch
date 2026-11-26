@@ -1,3 +1,6 @@
 -std=c11
+-DLV_CONF_INCLUDE_SIMPLE
 -I../sdk/include
 -I../sdk/src
+-I../sdk/lvgl
+-I../sdk/third_party/lvgl
