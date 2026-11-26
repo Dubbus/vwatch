@@ -10,6 +10,10 @@ static vw_sensors_t sensors;
 static uint32_t now_ms;
 static uint8_t rx[VW_MAX_PAYLOAD];
 
+/* backlight: auto-on with any button press, off after a timeout (sim time) */
+static int bl_on, bl_auto = 1;
+static uint32_t bl_timeout_ms = 8000, bl_off_at;
+
 const vw_sensors_t *vw_sensors(void) { return &sensors; }
 uint32_t vw_millis(void) { return now_ms; }
 
@@ -29,6 +33,21 @@ void vw_log(const char *fmt, ...) {
     if (n >= (int)sizeof buf) n = sizeof buf - 1;
     send(VW_MSG_LOG, buf, (uint16_t)n);
 }
+
+static void set_backlight(int on) {
+    if (on == bl_on) return;
+    bl_on = on;
+    vw_msg_backlight_t m = {(uint8_t)(on ? 100 : 0)};
+    send(VW_MSG_BACKLIGHT, &m, sizeof m);
+}
+
+void vw_backlight(int on) {
+    if (on) bl_off_at = now_ms + bl_timeout_ms;
+    set_backlight(on ? 1 : 0);
+}
+
+void vw_backlight_timeout(uint32_t ms) { bl_timeout_ms = ms; }
+void vw_backlight_auto(int enabled) { bl_auto = enabled ? 1 : 0; }
 
 /* Ship the dirty region as one or more RECT messages, rows split so each
  * message fits VW_MAX_PAYLOAD. Returns pixel bytes sent. */
@@ -86,6 +105,10 @@ int main(void) {
             for (size_t i = 0; i < sizeof info.app_name - 1 && vw_app_name[i]; i++)
                 info.app_name[i] = vw_app_name[i];      /* NUL-padded by the memset */
             send(VW_MSG_INFO, &info, sizeof info);
+            {                                            /* tell the host the current light state */
+                vw_msg_backlight_t m = {(uint8_t)(bl_on ? 100 : 0)};
+                send(VW_MSG_BACKLIGHT, &m, sizeof m);
+            }
             vw_dirty.x0 = 0; vw_dirty.y0 = 0;            /* host needs a full frame */
             vw_dirty.x1 = VW_W - 1; vw_dirty.y1 = VW_H - 1;
             flush_dirty();
@@ -99,6 +122,7 @@ int main(void) {
                 sensors.hr = t.hr;
                 sensors.speed = t.speed;
                 sensors.cadence = t.cadence;
+                if (bl_on && bl_timeout_ms && (int32_t)(now_ms - bl_off_at) >= 0) set_backlight(0);
                 app_tick();
                 vw_msg_tick_done_t done = {now_ms, flush_dirty()};
                 send(VW_MSG_TICK_DONE, &done, sizeof done);
@@ -108,7 +132,10 @@ int main(void) {
             if (len >= sizeof(vw_msg_button_t)) {
                 vw_msg_button_t b;
                 memcpy(&b, rx, sizeof b);
-                if (b.button < VW_BTN_COUNT) app_button(b.button, b.pressed);
+                if (b.button < VW_BTN_COUNT && b.pressed <= VW_HELD) {
+                    if (b.pressed == VW_PRESSED && bl_auto) vw_backlight(1);
+                    app_button(b.button, b.pressed);
+                }
                 flush_dirty();
             }
             break;

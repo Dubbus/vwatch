@@ -45,6 +45,7 @@ VmWindow::VmWindow(const QString &target, QWidget *parent)
         updateStatus();
     });
     connect(m_session, &Session::screenChanged, m_view, [this](const QRect &) { m_view->update(); });
+    connect(m_session, &Session::backlightChanged, m_view, &WatchView::setBacklight);
     connect(m_session, &Session::logLine, this, [this](const QString &l) {
         log(l);
         // A firmware "reports" a metric by logging e.g. "te 3.22 ...". Plot it
@@ -94,9 +95,10 @@ void VmWindow::buildUi() {
     m_view = new WatchView(this);
     m_view->setScreen(&m_session->screen());
     setCentralWidget(m_view);
-    connect(m_view, &WatchView::button, this, [this](int id, bool down) {
-        m_session->sendButton(id, down);
-        if (down) log(QString("[input] %1").arg(kButtonNames[id]), Qt::gray);
+    connect(m_view, &WatchView::button, this, [this](int id, int ev) {
+        m_session->sendButton(id, ev);
+        if (ev == 1) log(QString("[input] %1").arg(kButtonNames[id]), Qt::gray);
+        if (ev == 2) log(QString("[input] %1 (held)").arg(kButtonNames[id]), Qt::gray);
     });
 
     // ---- menus (VirtualBox-style) ----
@@ -143,12 +145,23 @@ void VmWindow::buildUi() {
     for (int i = 0; i < 5; ++i) {
         QAction *a = input->addAction(QString("Press %1  (%2)").arg(kButtonNames[i], keys[i]));
         connect(a, &QAction::triggered, this, [this, i] {
-            m_session->sendButton(i, true);
-            m_session->sendButton(i, false);
+            m_session->sendButton(i, 1);
+            m_session->sendButton(i, 0);
+        });
+        QAction *h = input->addAction(QString("Hold %1").arg(kButtonNames[i]));
+        connect(h, &QAction::triggered, this, [this, i] {
+            m_session->sendButton(i, 1);
+            m_session->sendButton(i, 2);
+            m_session->sendButton(i, 0);
         });
     }
 
     QMenu *view = menuBar()->addMenu("&View");
+    QAction *mip = view->addAction("MIP Display Realism");
+    mip->setCheckable(true);
+    mip->setChecked(true);
+    connect(mip, &QAction::toggled, m_view, &WatchView::setRealism);
+    view->addSeparator();
     QMenu *help = menuBar()->addMenu("&Help");
     help->addAction("&About vwatch", this, [this] {
         QMessageBox::about(this, "About vwatch",

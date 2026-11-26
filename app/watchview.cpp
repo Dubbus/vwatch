@@ -4,15 +4,59 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QTimer>
 #include <QtMath>
 
 // Button ids match VW_BTN_* in sdk/include/vwatch.h.
 enum { LIGHT = 0, UP, DOWN, START, BACK };
 static const char *const kNames[] = {"LIGHT", "UP", "DOWN", "START", "BACK"};
 
-WatchView::WatchView(QWidget *parent) : QWidget(parent) {
+WatchView::WatchView(QWidget *parent) : QWidget(parent), m_hold(new QTimer(this)) {
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(360, 360);
+    m_hold->setSingleShot(true);
+    m_hold->setInterval(1000);                     // long press, as on the watch
+    connect(m_hold, &QTimer::timeout, this, [this] { if (m_down >= 0) emit button(m_down, 2); });
+}
+
+void WatchView::press(int id) {
+    m_down = id;
+    emit button(id, 1);
+    m_hold->start();
+    update();
+}
+
+void WatchView::release() {
+    if (m_down < 0) return;
+    m_hold->stop();
+    emit button(m_down, 0);
+    m_down = -1;
+    update();
+}
+
+// The 64 RGB222 colours as they appear on the display. "Realism" models a
+// transflective MIP panel: unlit it reflects ambient light (grey "paper"
+// whites, lifted blacks, muted colour); lit it is brighter and cooler.
+QVector<QRgb> WatchView::palette(bool lit, bool realism) {
+    QVector<QRgb> t(64);
+    for (int c = 0; c < 64; ++c) {
+        double rgb[3] = {((c >> 4) & 3) / 3.0, ((c >> 2) & 3) / 3.0, (c & 3) / 3.0};
+        if (!realism) {
+            t[c] = qRgb(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255));
+            continue;
+        }
+        const double black[3] = {lit ? 8.0 : 26.0, lit ? 8.0 : 26.0, lit ? 12.0 : 24.0};
+        const double white[3] = {lit ? 236.0 : 192.0, lit ? 241.0 : 193.0, lit ? 250.0 : 184.0};
+        const double sat = lit ? 1.0 : 0.78;
+        const double luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+        int out[3];
+        for (int i = 0; i < 3; ++i) {
+            const double v = luma + (rgb[i] - luma) * sat;
+            out[i] = int(black[i] + (white[i] - black[i]) * v + 0.5);
+        }
+        t[c] = qRgb(out[0], out[1], out[2]);
+    }
+    return t;
 }
 
 WatchView::Geometry WatchView::geometry() const {
@@ -64,8 +108,21 @@ void WatchView::paintEvent(QPaintEvent *) {
     }
     p.fillRect(screenRect, Qt::black);
     if (m_screen) {
+        QImage img = *m_screen;                                   // shallow copy; detaches on palette set
+        if (img.format() == QImage::Format_Indexed8) img.setColorTable(palette(m_backlight > 0, m_realism));
         p.setRenderHint(QPainter::SmoothPixmapTransform, false);   // keep pixels sharp
-        p.drawImage(screenRect, *m_screen);
+        p.drawImage(screenRect, img);
+        const qreal px = screenRect.width() / 240.0;
+        if (m_realism && px >= 2.0) {                              // faint MIP pixel grid
+            p.setRenderHint(QPainter::Antialiasing, false);
+            p.setPen(QPen(QColor(0, 0, 0, m_backlight > 0 ? 28 : 40), 1));
+            for (int i = 1; i < 240; ++i) {
+                const qreal o = i * px;
+                p.drawLine(QPointF(screenRect.left() + o, screenRect.top()), QPointF(screenRect.left() + o, screenRect.bottom()));
+                p.drawLine(QPointF(screenRect.left(), screenRect.top() + o), QPointF(screenRect.right(), screenRect.top() + o));
+            }
+            p.setRenderHint(QPainter::Antialiasing, true);
+        }
     }
     if (!m_overlay.isEmpty()) {
         p.fillRect(screenRect, QColor(0, 0, 0, 170));
@@ -95,19 +152,12 @@ void WatchView::mousePressEvent(QMouseEvent *e) {
     const Geometry g = geometry();
     for (int i = 0; i < 5; ++i)
         if (g.buttons[i].adjusted(-4, -4, 4, 4).contains(e->position())) {
-            m_down = i;
-            emit button(i, true);
-            update();
+            press(i);
             return;
         }
 }
 
-void WatchView::mouseReleaseEvent(QMouseEvent *) {
-    if (m_down < 0) return;
-    emit button(m_down, false);
-    m_down = -1;
-    update();
-}
+void WatchView::mouseReleaseEvent(QMouseEvent *) { release(); }
 
 int WatchView::keyToButton(int key) {
     switch (key) {
@@ -123,15 +173,11 @@ int WatchView::keyToButton(int key) {
 void WatchView::keyPressEvent(QKeyEvent *e) {
     const int b = keyToButton(e->key());
     if (b < 0 || e->isAutoRepeat()) return QWidget::keyPressEvent(e);
-    m_down = b;
-    emit button(b, true);
-    update();
+    press(b);
 }
 
 void WatchView::keyReleaseEvent(QKeyEvent *e) {
     const int b = keyToButton(e->key());
     if (b < 0 || e->isAutoRepeat()) return QWidget::keyReleaseEvent(e);
-    emit button(b, false);
-    m_down = -1;
-    update();
+    release();
 }

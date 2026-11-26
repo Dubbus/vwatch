@@ -61,6 +61,19 @@ void vw_text_centered(int cx, int y, const char *s, vw_color_t c, int scale);
 /* ---------- input ---------- */
 enum { VW_BTN_LIGHT = 0, VW_BTN_UP, VW_BTN_DOWN, VW_BTN_START, VW_BTN_BACK, VW_BTN_COUNT };
 
+/* Button events passed to app_button(). A long press delivers PRESSED, then
+ * HELD after about a second, then RELEASED. Garmin-style UIs use HELD for
+ * secondary actions (menu on UP, controls on LIGHT, reset on BACK). */
+enum { VW_RELEASED = 0, VW_PRESSED = 1, VW_HELD = 2 };
+
+/* ---------- backlight ----------
+ * Like a real transflective (MIP) watch: the screen is readable without the
+ * backlight, and by default any button press lights it for a few seconds.
+ * Apps may take manual control. */
+void vw_backlight(int on);                     /* on now (resets the timeout) or off */
+void vw_backlight_timeout(uint32_t ms);        /* auto-off delay, 0 = never auto-off */
+void vw_backlight_auto(int enabled);           /* light on any button press (default 1) */
+
 typedef struct {
     float hr;          /* bpm, 0 if no reading */
     float speed;       /* m/s */
@@ -78,7 +91,7 @@ void vw_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 extern const char vw_app_name[];   /* define with VW_APP_NAME("...") */
 void app_init(void);
 void app_tick(void);
-void app_button(int button, int pressed);
+void app_button(int button, int event);   /* event: VW_PRESSED / VW_HELD / VW_RELEASED */
 
 #define VW_APP_NAME(s) const char vw_app_name[] = s
 

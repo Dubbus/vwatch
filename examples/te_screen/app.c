@@ -155,8 +155,10 @@ void app_tick(void) {
            (unsigned long)te.seconds);
 }
 
-void app_button(int button, int pressed) {
-    if (pressed && button == VW_BTN_BACK) {
+/* Hold BACK to reset: like a real watch, a single accidental press during an
+ * activity must not throw the session away. */
+void app_button(int button, int event) {
+    if (event == VW_HELD && button == VW_BTN_BACK) {
         vw_log("session reset");
         reset();
     }

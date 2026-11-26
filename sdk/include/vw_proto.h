@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 
-#define VW_PROTO_VERSION 1
+#define VW_PROTO_VERSION 2
 #define VW_SYNC0 0xA5
 #define VW_SYNC1 0x5A
 #define VW_MAX_PAYLOAD 4096
@@ -29,6 +29,7 @@ enum {
     VW_MSG_RECT      = 0x82,  /* vw_msg_rect_t header + w*h pixels (1 byte each) */
     VW_MSG_LOG       = 0x83,  /* UTF-8 text, no terminator */
     VW_MSG_TICK_DONE = 0x84,  /* vw_msg_tick_done_t */
+    VW_MSG_BACKLIGHT = 0x85,  /* vw_msg_backlight_t: firmware turned the backlight on/off */
 };
 
 typedef struct __attribute__((packed)) {
@@ -40,8 +41,12 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint8_t button;       /* VW_BTN_* */
-    uint8_t pressed;      /* 1 down, 0 up */
+    uint8_t pressed;      /* 0 released, 1 pressed, 2 held (host sends after ~1 s down) */
 } vw_msg_button_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t level;        /* 0 = off (reflective only), 1..100 = backlight on */
+} vw_msg_backlight_t;
 
 typedef struct __attribute__((packed)) {
     uint8_t proto_version;

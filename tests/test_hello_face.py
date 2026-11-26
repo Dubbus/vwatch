@@ -18,7 +18,7 @@ def main():
     w = Watch(os.path.join(EX, "build", "hello_face.elf"))
     try:
         info = w.hello()
-        assert info == {"proto": 1, "format": 1, "w": 240, "h": 240, "round": 1,
+        assert info == {"proto": 2, "format": 1, "w": 240, "h": 240, "round": 1,
                         "app": "hello_face"}, info
         r = w.tick(0, hr=100)
         assert r["frame_bytes"] > 0, r
@@ -34,6 +34,13 @@ def main():
         w.button("START"); w.button("START", False)
         w.tick(5000, hr=100)
         assert "stopwatch started" in w.logs, w.logs
+        assert w.backlight > 0, "a button press should light the screen"
+        w.tick(14000, hr=100)                         # 8 s auto-off (sim time) has passed
+        assert w.backlight == 0, "backlight should time out"
+
+        w.hold("BACK")                                # hold BACK resets even while running
+        w.tick(15000, hr=100)
+        assert "stopwatch reset" in w.logs, w.logs
     finally:
         w.close()
     print("hello_face: OK")

@@ -14,8 +14,11 @@ extern "C" {
 static constexpr int VW_SCREEN_W = 240;   // matches the SDK's VW_W/VW_H
 static constexpr int VW_SCREEN_H = 240;
 
-Session::Session(QObject *parent) : QObject(parent), m_screen(VW_SCREEN_W, VW_SCREEN_H, QImage::Format_RGB32) {
-    m_screen.fill(Qt::black);
+Session::Session(QObject *parent) : QObject(parent), m_screen(VW_SCREEN_W, VW_SCREEN_H, QImage::Format_Indexed8) {
+    QVector<QRgb> raw(64);
+    for (int c = 0; c < 64; ++c) raw[c] = qRgb(((c >> 4) & 3) * 85, ((c >> 2) & 3) * 85, (c & 3) * 85);
+    m_screen.setColorTable(raw);
+    m_screen.fill(0);
 }
 
 Session::~Session() { stop(); }
@@ -109,8 +112,8 @@ void Session::sendTick(quint32 tMs, float hr, float speed, float cadence) {
     send(VW_MSG_TICK, QByteArray(reinterpret_cast<const char *>(&t), sizeof t));
 }
 
-void Session::sendButton(int button, bool pressed) {
-    vw_msg_button_t b{quint8(button), quint8(pressed ? 1 : 0)};
+void Session::sendButton(int button, int event) {
+    vw_msg_button_t b{quint8(button), quint8(event)};
     send(VW_MSG_BUTTON, QByteArray(reinterpret_cast<const char *>(&b), sizeof b));
 }
 
@@ -152,17 +155,17 @@ void Session::handle(quint8 type, const QByteArray &p) {
         if (p.size() < int(sizeof r) + r.w * r.h) return;
         const auto *px = reinterpret_cast<const quint8 *>(p.constData() + sizeof r);
         for (int y = 0; y < r.h; ++y) {
-            auto *line = reinterpret_cast<QRgb *>(m_screen.scanLine(r.y + y)) + r.x;
-            for (int x = 0; x < r.w; ++x) {
-                const quint8 c = px[y * r.w + x];
-                line[x] = qRgb(((c >> 4) & 3) * 85, ((c >> 2) & 3) * 85, (c & 3) * 85);
-            }
+            uchar *line = m_screen.scanLine(r.y + y) + r.x;
+            for (int x = 0; x < r.w; ++x) line[x] = px[y * r.w + x] & 0x3F;
         }
         emit screenChanged(QRect(r.x, r.y, r.w, r.h));
         break;
     }
     case VW_MSG_LOG:
         emit logLine(QString::fromUtf8(p));
+        break;
+    case VW_MSG_BACKLIGHT:
+        if (!p.isEmpty()) emit backlightChanged(quint8(p[0]));
         break;
     case VW_MSG_TICK_DONE: {
         vw_msg_tick_done_t d{};

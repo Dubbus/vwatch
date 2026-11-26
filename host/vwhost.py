@@ -17,7 +17,7 @@ import argparse, math, os, socket, struct, subprocess, sys, tempfile, time, zlib
 
 SYNC = b"\xA5\x5A"
 HELLO, TICK, BUTTON = 0x01, 0x02, 0x03
-INFO, RECT, LOG, TICK_DONE = 0x81, 0x82, 0x83, 0x84
+INFO, RECT, LOG, TICK_DONE, BACKLIGHT = 0x81, 0x82, 0x83, 0x84, 0x85
 BUTTONS = {"LIGHT": 0, "UP": 1, "DOWN": 2, "START": 3, "BACK": 4}
 
 
@@ -39,6 +39,7 @@ class Watch:
         self.info = None
         self.fb = [[0] * 240 for _ in range(240)]
         self.logs: list[str] = []
+        self.backlight = 0
 
     # ---------- wire ----------
     def send(self, typ: int, payload: bytes = b"") -> None:
@@ -74,6 +75,8 @@ class Watch:
                 self.fb[y + row][x:x + w] = px[row * w:(row + 1) * w]
         elif typ == LOG:
             self.logs.append(p.decode(errors="replace"))
+        elif typ == BACKLIGHT:
+            self.backlight = p[0] if p else 0
 
     def until(self, want: int) -> bytes:
         while True:
@@ -92,6 +95,12 @@ class Watch:
         self.send(TICK, struct.pack("<Ifff", t_ms, hr, speed, cadence))
         t, nbytes = struct.unpack("<II", self.until(TICK_DONE))
         return {"t_ms": t, "frame_bytes": nbytes}
+
+    def hold(self, name: str) -> None:
+        """Long press: PRESSED, HELD (as the host sends after ~1 s), RELEASED."""
+        b = BUTTONS[name]
+        for ev in (1, 2, 0):
+            self.send(BUTTON, struct.pack("<BB", b, ev))
 
     def button(self, name: str, pressed: bool = True) -> None:
         self.send(BUTTON, struct.pack("<BB", BUTTONS[name], int(pressed)))

@@ -69,7 +69,11 @@ def check_ramp():
         assert redraws == n // 5, "the elapsed time changes every tick, so every tick redraws"
         assert arc_pixel(w, 230) != DKGRAY, "gauge should fill once TE > 0"
 
-        w.button("BACK"); w.button("BACK", False)
+        w.button("BACK"); w.button("BACK", False)    # a single press must NOT reset
+        w.tick((n + 2) * 1000, hr=60)
+        assert "session reset" not in w.logs, "a single BACK press must not reset the session"
+        assert w.backlight > 0, "any button press should turn the backlight on"
+        w.hold("BACK")                                # holding does
         w.tick((n + 4) * 1000, hr=60)
         assert "session reset" in w.logs and te_logs(w)[-1][0] == 0.0, w.logs[-3:]
         print(f"te_screen ramp: TE {tes[-1]:.2f} (reference {ref:.3f}), {redraws} redraws: OK")

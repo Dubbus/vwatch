@@ -2,7 +2,8 @@
  *   - digital clock from simulated time (starts at 10:08:00)
  *   - seconds ring around the bezel
  *   - live heart rate from the sensor feed
- *   - UP/DOWN cycle the accent colour, START toggles a stopwatch
+ *   - UP/DOWN cycle the accent colour, START toggles a stopwatch,
+ *     BACK resets it when stopped, hold BACK resets it any time
  */
 #include <stdio.h>
 #include <vwatch.h>
@@ -61,8 +62,15 @@ void app_init(void) {
 
 void app_tick(void) { draw(); }
 
-void app_button(int button, int pressed) {
-    if (!pressed) return;
+void app_button(int button, int event) {
+    if (event == VW_HELD && button == VW_BTN_BACK) {     /* hold BACK: reset, even while running */
+        sw_running = 0;
+        sw_elapsed_ms = 0;
+        vw_log("stopwatch reset");
+        draw();
+        return;
+    }
+    if (event != VW_PRESSED) return;
     int n = (int)(sizeof accents / sizeof accents[0]);
     if (button == VW_BTN_UP) accent = (accent + 1) % n;
     else if (button == VW_BTN_DOWN) accent = (accent + n - 1) % n;
