@@ -1,0 +1,7 @@
+Watch fonts for LVGL apps, pre-rendered at 4 bpp by tools/mkfont.py
+(regenerate with tools/genfonts.sh).
+
+Source: Barlow Condensed (SemiBold, Medium), Copyright 2017 The Barlow Project
+Authors (https://github.com/jpt/barlow), licensed under the SIL Open Font
+License 1.1 (OFL.txt in this directory). The generated bitmaps are a
+modified version of the font and are distributed under the same licence.

@@ -28,7 +28,7 @@ LVGL_DIR   := $(VWATCH_SDK)/third_party/lvgl
 LVGL_BUILD := $(VWATCH_SDK)/build/lvgl-$(PORT)
 LVGL_INC   := -DLV_CONF_INCLUDE_SIMPLE -I$(VWATCH_SDK)/lvgl -I$(LVGL_DIR)
 CFLAGS     += $(LVGL_INC)
-LIB_SRCS   += $(VWATCH_SDK)/src/vw_lvgl.c
+LIB_SRCS   += $(VWATCH_SDK)/src/vw_lvgl.c $(wildcard $(VWATCH_SDK)/fonts/*.c)
 LVGL_SRCS  := $(shell find $(LVGL_DIR)/src -name '*.c')
 LVGL_OBJS  := $(patsubst $(LVGL_DIR)/%.c,$(LVGL_BUILD)/%.o,$(LVGL_SRCS))
 LVGL_LIB   := $(LVGL_BUILD)/liblvgl.a
@@ -51,6 +51,10 @@ SDK_LIB  := build/sdk/libvwatch.a
 build/sdk/%.o: $(VWATCH_SDK)/src/%.c $(wildcard $(VWATCH_SDK)/include/*.h $(VWATCH_SDK)/src/*.h)
 	@mkdir -p build/sdk
 	$(CC) $(CFLAGS) -c $< -o $@
+
+build/sdk/%.o: $(VWATCH_SDK)/fonts/%.c
+	@mkdir -p build/sdk
+	@$(CC) $(CPU) -O2 -ffunction-sections -fdata-sections -w $(SDK_INC) $(LVGL_INC) -c $< -o $@
 
 $(SDK_LIB): $(LIB_OBJS)
 	@$(AR) rcs $@ $^

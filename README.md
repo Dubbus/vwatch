@@ -56,7 +56,7 @@ watchdog.
 | | | |
 |---|---|---|
 | ![lvgl_face](docs/lvgl_face.png) | ![hello_face](docs/hello_face.png) | ![te_screen](docs/te_screen.png) |
-| `lvgl_face`: watch face built with LVGL | `hello_face`: the same face with the SDK's basic drawing calls | `te_screen`: live Aerobic Training Effect from heart rate |
+| `lvgl_face`: watch face built with LVGL | `hello_face`: the same face with the SDK's basic drawing calls | `te_screen`: live Aerobic Training Effect data screen (LVGL, condensed fonts) |
 
 ## LVGL
 
@@ -81,6 +81,18 @@ void app_init(void) {
 Set `USE_LVGL := 1` in the app Makefile. LVGL is a git submodule:
 `git clone --recursive`, or `git submodule update --init` in an existing clone.
 The first LVGL build compiles it once (~10 s) into `sdk/build/`.
+
+### Watch fonts
+
+`#include <vw_fonts.h>` gives condensed fonts sized for watch data screens:
+`vw_font_num_96/_56/_36` (digits) and `vw_font_label_24/_18`, from Barlow
+Condensed (OFL). Like real watch firmware, they're pre-rendered bitmaps, so
+drawing text costs no CPU, and they're tuned for the 64-colour display:
+digits are equal width (no sideways jiggle as values change), coverage is
+snapped to the 4 grey levels the screen can show, and small sizes are
+grid-fitted so thin strokes and dots land on whole pixels.
+`tools/mkfont.py` converts any TrueType font the same way;
+`tools/genfonts.sh` regenerates the set.
 
 ## Hardware parity
 
